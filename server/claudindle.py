@@ -5,21 +5,29 @@ Usage:
   claudindle.py render [--out usage.png]   # one-shot render
   claudindle.py serve  [--port 8080]       # re-render every REFRESH seconds and serve /usage.png
 
+  claudindle.py login                      # one-time OAuth login (browser + paste code)
+
 Token lookup order:
   1. CLAUDE_OAUTH_TOKEN env var
-  2. token file at CLAUDINDLE_TOKEN_FILE (default ~/.config/claudindle/token)
-  3. macOS Keychain entry used by Claude Code (dev convenience on a Mac)
+  2. credentials saved by `login` (CLAUDINDLE_CREDS, default ~/.config/claudindle/credentials.json),
+     refreshed automatically when expired
+  3. token file at CLAUDINDLE_TOKEN_FILE (default ~/.config/claudindle/token)
+  4. macOS Keychain entry used by Claude Code (dev convenience on a Mac)
 """
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import io
 import json
 import os
+import secrets
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,6 +36,13 @@ from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw, ImageFont
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+# Claude Code's public OAuth client; same flow as `claude login`.
+OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
+OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+OAUTH_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback"
+OAUTH_SCOPES = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+CREDS_PATH = os.path.expanduser(os.environ.get("CLAUDINDLE_CREDS", "~/.config/claudindle/credentials.json"))
 TZ = ZoneInfo(os.environ.get("CLAUDINDLE_TZ", "America/Vancouver"))
 REFRESH = int(os.environ.get("CLAUDINDLE_REFRESH", "180"))
 WIDTH, HEIGHT = 1072, 1448  # Kindle Paperwhite 7th gen, portrait
@@ -40,11 +55,76 @@ FONT_CANDIDATES = [
 ]
 
 
+# --------------------------------------------------------------- oauth ----
+def _post_json(url: str, payload: dict) -> dict:
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "User-Agent": "claudindle/0.1"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+
+def save_creds(tok: dict) -> None:
+    os.makedirs(os.path.dirname(CREDS_PATH), exist_ok=True)
+    creds = {
+        "access_token": tok["access_token"],
+        "refresh_token": tok.get("refresh_token"),
+        "expires_at": time.time() + int(tok.get("expires_in", 3600)),
+        "scope": tok.get("scope"),
+    }
+    fd = os.open(CREDS_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(creds, f, indent=2)
+
+
+def login() -> None:
+    verifier = secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(32)
+    url = OAUTH_AUTHORIZE_URL + "?" + urllib.parse.urlencode({
+        "code": "true", "client_id": OAUTH_CLIENT_ID, "response_type": "code",
+        "redirect_uri": OAUTH_REDIRECT_URI, "scope": OAUTH_SCOPES,
+        "code_challenge": challenge, "code_challenge_method": "S256", "state": state,
+    })
+    print("Open this URL in a browser, sign in, and paste the code shown:\n\n" + url + "\n")
+    raw = input("Code: ").strip()
+    code, _, got_state = raw.partition("#")
+    tok = _post_json(OAUTH_TOKEN_URL, {
+        "grant_type": "authorization_code", "code": code, "state": got_state or state,
+        "client_id": OAUTH_CLIENT_ID, "redirect_uri": OAUTH_REDIRECT_URI, "code_verifier": verifier,
+    })
+    save_creds(tok)
+    print("Saved credentials to", CREDS_PATH)
+
+
+def token_from_creds() -> str | None:
+    if not os.path.exists(CREDS_PATH):
+        return None
+    with open(CREDS_PATH) as f:
+        creds = json.load(f)
+    if time.time() < creds.get("expires_at", 0) - 120:
+        return creds["access_token"]
+    if not creds.get("refresh_token"):
+        return creds["access_token"]
+    tok = _post_json(OAUTH_TOKEN_URL, {
+        "grant_type": "refresh_token", "refresh_token": creds["refresh_token"],
+        "client_id": OAUTH_CLIENT_ID,
+    })
+    tok.setdefault("refresh_token", creds["refresh_token"])
+    save_creds(tok)
+    print(time.strftime("%H:%M:%S"), "refreshed access token", flush=True)
+    return tok["access_token"]
+
+
 # ---------------------------------------------------------------- data ----
 def get_token() -> str:
     tok = os.environ.get("CLAUDE_OAUTH_TOKEN")
     if tok:
         return tok.strip()
+    tok = token_from_creds()
+    if tok:
+        return tok
     path = os.path.expanduser(os.environ.get("CLAUDINDLE_TOKEN_FILE", "~/.config/claudindle/token"))
     if os.path.exists(path):
         with open(path) as f:
@@ -137,8 +217,9 @@ def render(usage: dict | None, error: str | None = None) -> Image.Image:
     if error:
         d.text((margin, y), "Could not fetch usage:", font=f_title, fill=0)
         y += 80
-        for line in error[:300].splitlines() or [error]:
-            d.text((margin, y), line[:48], font=f_small, fill=0)
+        import textwrap
+        for line in textwrap.wrap(error[:400], 48)[:8]:
+            d.text((margin, y), line, font=f_small, fill=0)
             y += 40
     elif not limits:
         d.text((margin, y), "No limits reported", font=f_title, fill=0)
@@ -221,12 +302,15 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("render")
     r.add_argument("--out", default="usage.png")
+    sub.add_parser("login")
     s = sub.add_parser("serve")
     s.add_argument("--port", type=int, default=8080)
     s.add_argument("--bind", default="0.0.0.0")
     a = ap.parse_args()
 
-    if a.cmd == "render":
+    if a.cmd == "login":
+        login()
+    elif a.cmd == "render":
         with open(a.out, "wb") as f:
             f.write(render_png())
         print("wrote", a.out)
