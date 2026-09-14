@@ -39,6 +39,20 @@ curl -o /tmp/usage.png http://localhost:8080/usage.png
 Edit `claudindle.service` if your user or paths differ. Timezone and refresh
 interval are environment variables in that file.
 
+### Without sudo (e.g. the Homebridge image's restricted terminal)
+
+If the Pi already has Python 3 with Pillow (`python3 -c "import PIL"`), skip the
+venv and use cron instead of systemd:
+
+```sh
+git clone https://github.com/DiegoTavares/claudindle.git ~/claudindle
+mkdir -p ~/.config/claudindle && (umask 077; echo '<token>' > ~/.config/claudindle/token)
+~/claudindle/server/run.sh
+(crontab -l 2>/dev/null; echo "@reboot $HOME/claudindle/server/run.sh"; echo "*/5 * * * * $HOME/claudindle/server/run.sh") | crontab -
+```
+
+`run.sh` is idempotent, so the 5-minute cron line just restarts the server if it died.
+
 ## Kindle setup
 
 Copy `kindle/claudindle.sh` to `/mnt/us/claudindle/` on the Kindle and, if you

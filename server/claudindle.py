@@ -10,6 +10,8 @@ Token lookup order:
   2. token file at CLAUDINDLE_TOKEN_FILE (default ~/.config/claudindle/token)
   3. macOS Keychain entry used by Claude Code (dev convenience on a Mac)
 """
+from __future__ import annotations
+
 import argparse
 import io
 import json
@@ -112,7 +114,10 @@ def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
             return ImageFont.truetype(path, size, index=1 if (bold and path.endswith(".ttc")) else 0)
         except Exception:
             continue
-    return ImageFont.load_default(size)
+    try:
+        return ImageFont.load_default(size)
+    except TypeError:  # Pillow < 10.1
+        return ImageFont.load_default()
 
 
 def render(usage: dict | None, error: str | None = None) -> Image.Image:
