@@ -58,7 +58,7 @@ def get_token() -> str:
             return json.loads(raw)["claudeAiOauth"]["accessToken"]
         except Exception:
             pass
-    raise SystemExit("No token: set CLAUDE_OAUTH_TOKEN or write it to " + path)
+    raise RuntimeError("No token: set CLAUDE_OAUTH_TOKEN or write it to " + path)
 
 
 def fetch_usage() -> dict:
