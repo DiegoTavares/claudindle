@@ -1,0 +1,3 @@
+server/.venv/
+*.png
+__pycache__/

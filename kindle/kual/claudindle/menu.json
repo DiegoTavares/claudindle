@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "name": "Claudindle",
+      "priority": 1,
+      "items": [
+        { "name": "Start usage display", "priority": 1, "action": "/mnt/us/claudindle/claudindle.sh", "params": "start", "exitmenu": true },
+        { "name": "Stop usage display",  "priority": 2, "action": "/mnt/us/claudindle/claudindle.sh", "params": "stop", "exitmenu": true },
+        { "name": "Refresh once",        "priority": 3, "action": "/mnt/us/claudindle/claudindle.sh", "params": "once", "exitmenu": true }
+      ]
+    }
+  ]
+}

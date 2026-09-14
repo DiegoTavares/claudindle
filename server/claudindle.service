@@ -1,0 +1,18 @@
+[Unit]
+Description=Claudindle - Claude usage renderer for Kindle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/claudindle/server
+Environment=CLAUDINDLE_TZ=America/Vancouver
+Environment=CLAUDINDLE_REFRESH=180
+Environment=CLAUDINDLE_TOKEN_FILE=/home/pi/.config/claudindle/token
+ExecStart=/home/pi/claudindle/server/.venv/bin/python /home/pi/claudindle/server/claudindle.py serve --port 8080
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
