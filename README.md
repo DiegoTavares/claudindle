@@ -19,13 +19,16 @@ cd ~/claudindle/server
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
-Create a long-lived token on your Mac and copy it to the Pi:
+Log the Pi in to your Claude account. Tokens from `claude setup-token` do not
+work here: the usage endpoint requires a full login. The login is separate from
+your other devices and refreshes itself.
 
 ```sh
-claude setup-token          # prints a token, valid for about a year
-ssh pi@raspberrypi.local 'mkdir -p ~/.config/claudindle && umask 077 && cat > ~/.config/claudindle/token'
-# paste the token, then Ctrl-D
+.venv/bin/python claudindle.py login            # prints a URL; open it and sign in
+.venv/bin/python claudindle.py login --code '<code shown in the browser>'
 ```
+
+Credentials land in `~/.config/claudindle/credentials.json` (mode 600).
 
 Test once, then install the service:
 
@@ -46,7 +49,7 @@ venv and use cron instead of systemd:
 
 ```sh
 git clone https://github.com/DiegoTavares/claudindle.git ~/claudindle
-mkdir -p ~/.config/claudindle && (umask 077; echo '<token>' > ~/.config/claudindle/token)
+python3 ~/claudindle/server/claudindle.py login        # then: login --code '<code>'
 ~/claudindle/server/run.sh
 (crontab -l 2>/dev/null; echo "@reboot $HOME/claudindle/server/run.sh"; echo "*/5 * * * * $HOME/claudindle/server/run.sh") | crontab -
 ```

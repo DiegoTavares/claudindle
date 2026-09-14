@@ -78,23 +78,40 @@ def save_creds(tok: dict) -> None:
         json.dump(creds, f, indent=2)
 
 
-def login() -> None:
-    verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    state = secrets.token_urlsafe(32)
-    url = OAUTH_AUTHORIZE_URL + "?" + urllib.parse.urlencode({
-        "code": "true", "client_id": OAUTH_CLIENT_ID, "response_type": "code",
-        "redirect_uri": OAUTH_REDIRECT_URI, "scope": OAUTH_SCOPES,
-        "code_challenge": challenge, "code_challenge_method": "S256", "state": state,
-    })
-    print("Open this URL in a browser, sign in, and paste the code shown:\n\n" + url + "\n")
-    raw = input("Code: ").strip()
-    code, _, got_state = raw.partition("#")
+PENDING_PATH = CREDS_PATH + ".pending"
+
+
+def login(code: str | None = None) -> None:
+    """Two steps: `login` prints a URL and remembers the PKCE verifier;
+    `login --code <code>` (pasted from the browser) finishes the exchange."""
+    if code is None:
+        verifier = secrets.token_urlsafe(64)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        state = secrets.token_urlsafe(32)
+        url = OAUTH_AUTHORIZE_URL + "?" + urllib.parse.urlencode({
+            "code": "true", "client_id": OAUTH_CLIENT_ID, "response_type": "code",
+            "redirect_uri": OAUTH_REDIRECT_URI, "scope": OAUTH_SCOPES,
+            "code_challenge": challenge, "code_challenge_method": "S256", "state": state,
+        })
+        os.makedirs(os.path.dirname(CREDS_PATH), exist_ok=True)
+        fd = os.open(PENDING_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"verifier": verifier, "state": state}, f)
+        print("1. Open this URL in a browser and sign in:\n\n" + url + "\n")
+        print("2. Then run:  claudindle.py login --code <code shown in the browser>")
+        return
+    if not os.path.exists(PENDING_PATH):
+        raise SystemExit("Run `login` without --code first.")
+    with open(PENDING_PATH) as f:
+        pending = json.load(f)
+    code, _, got_state = code.strip().partition("#")
     tok = _post_json(OAUTH_TOKEN_URL, {
-        "grant_type": "authorization_code", "code": code, "state": got_state or state,
-        "client_id": OAUTH_CLIENT_ID, "redirect_uri": OAUTH_REDIRECT_URI, "code_verifier": verifier,
+        "grant_type": "authorization_code", "code": code, "state": got_state or pending["state"],
+        "client_id": OAUTH_CLIENT_ID, "redirect_uri": OAUTH_REDIRECT_URI,
+        "code_verifier": pending["verifier"],
     })
     save_creds(tok)
+    os.remove(PENDING_PATH)
     print("Saved credentials to", CREDS_PATH)
 
 
@@ -302,14 +319,15 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("render")
     r.add_argument("--out", default="usage.png")
-    sub.add_parser("login")
+    l = sub.add_parser("login")
+    l.add_argument("--code", help="code shown in the browser after signing in")
     s = sub.add_parser("serve")
     s.add_argument("--port", type=int, default=8080)
     s.add_argument("--bind", default="0.0.0.0")
     a = ap.parse_args()
 
     if a.cmd == "login":
-        login()
+        login(a.code)
     elif a.cmd == "render":
         with open(a.out, "wb") as f:
             f.write(render_png())
