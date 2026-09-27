@@ -1,9 +1,9 @@
 #!/bin/sh
-# Claudindle - fetch the usage PNG from the Pi and draw it on the e-ink screen.
+# Claudindle - fetch the usage PNG from the server and draw it on the e-ink screen.
 # Install to /mnt/us/claudindle/ on the Kindle. Usage: claudindle.sh start|stop|once
 #
-# Set SERVER to your Raspberry Pi's address.
-SERVER="${SERVER:-http://raspberrypi.local:8080}"
+# Set SERVER to the server's address.
+SERVER="${SERVER:-http://192.168.1.104:8080}"
 INTERVAL="${INTERVAL:-180}"
 DIR=/mnt/us/claudindle
 PID=$DIR/claudindle.pid

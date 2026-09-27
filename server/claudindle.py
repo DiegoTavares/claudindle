@@ -50,6 +50,8 @@ WIDTH, HEIGHT = 1072, 1448  # Kindle Paperwhite 7th gen, portrait
 FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",  # Arch
+    "/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
     "/System/Library/Fonts/Menlo.ttc",
     "/Library/Fonts/DejaVuSansMono.ttf",
 ]
