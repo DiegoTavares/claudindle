@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -117,6 +118,13 @@ def login(code: str | None = None) -> None:
     print("Saved credentials to", CREDS_PATH)
 
 
+class LoginExpired(Exception):
+    """The refresh token was rejected; only a new `login` can fix it."""
+
+    def __str__(self) -> str:
+        return "Login expired: run `claudindle.py login`"
+
+
 def token_from_creds() -> str | None:
     if not os.path.exists(CREDS_PATH):
         return None
@@ -126,10 +134,15 @@ def token_from_creds() -> str | None:
         return creds["access_token"]
     if not creds.get("refresh_token"):
         return creds["access_token"]
-    tok = _post_json(OAUTH_TOKEN_URL, {
-        "grant_type": "refresh_token", "refresh_token": creds["refresh_token"],
-        "client_id": OAUTH_CLIENT_ID,
-    })
+    try:
+        tok = _post_json(OAUTH_TOKEN_URL, {
+            "grant_type": "refresh_token", "refresh_token": creds["refresh_token"],
+            "client_id": OAUTH_CLIENT_ID,
+        })
+    except urllib.error.HTTPError as e:
+        if e.code == 400 and b"invalid_grant" in e.read():
+            raise LoginExpired() from e
+        raise
     tok.setdefault("refresh_token", creds["refresh_token"])
     save_creds(tok)
     print(time.strftime("%H:%M:%S"), "refreshed access token", flush=True)
@@ -271,6 +284,7 @@ def render_png() -> bytes:
     try:
         img = render(fetch_usage())
     except Exception as e:  # keep the screen useful even when the API is down
+        print("fetch failed:", e, file=sys.stderr, flush=True)
         img = render(None, error=str(e))
     buf = io.BytesIO()
     img.save(buf, "PNG")
