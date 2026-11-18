@@ -47,9 +47,10 @@ class TokenRefreshTest(unittest.TestCase):
 class RenderPagesTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
-        patcher = mock.patch.object(claudindle, "STATE_DIR", self.dir)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name, value in (("STATE_DIR", self.dir), ("USAGE", claudindle.UsageCache())):
+            patcher = mock.patch.object(claudindle, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_failure_is_logged_and_rendered(self):
         with mock.patch.object(claudindle, "fetch_usage", side_effect=claudindle.LoginExpired()), \
@@ -60,6 +61,22 @@ class RenderPagesTest(unittest.TestCase):
         self.assertTrue(pages["limits"].startswith(b"\x89PNG"))
         self.assertIn("Login expired", stderr.getvalue())
         render.assert_called_once_with(None, None, error="Login expired: run `claudindle.py login`")
+
+    def test_rate_limit_keeps_last_limits_and_backs_off(self):
+        usage = {"limits": [{"kind": "session", "percent": 40}]}
+        with mock.patch.object(claudindle, "fetch_usage", return_value=usage):
+            claudindle.render_pages()
+        with mock.patch.object(claudindle, "fetch_usage", side_effect=http_error(429, b"")) as fetch, \
+                mock.patch.object(claudindle, "render_limits", wraps=claudindle.render_limits) as render, \
+                mock.patch("sys.stderr", new_callable=io.StringIO):
+            claudindle.render_pages()
+            claudindle.render_pages()  # inside the backoff window: no second request
+        self.assertEqual(fetch.call_count, 1)
+        args, kwargs = render.call_args
+        self.assertEqual(args[0], usage)
+        self.assertIn("429", kwargs["error"])
+        self.assertIsNotNone(kwargs["stale_since"])
+        self.assertGreater(claudindle.USAGE.retry_at, time.time() + claudindle.REFRESH)
 
     def test_activity_page_appears_once_a_machine_reports(self):
         now = int(time.time())

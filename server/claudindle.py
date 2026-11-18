@@ -401,13 +401,25 @@ def draw_tools(d: ImageDraw.ImageDraw, y: int, tools: list) -> int:
     return y + 54 * ((len(tools) + 1) // 2)
 
 
-def render_limits(usage: dict | None, activity: dict | None, error: str | None = None) -> Image.Image:
-    """The limits screen: usage bars, and the 7-day model split when activity is known."""
+def render_limits(usage: dict | None, activity: dict | None, error: str | None = None,
+                  stale_since: datetime | None = None) -> Image.Image:
+    """The limits screen: usage bars, and the 7-day model split when activity is known.
+
+    With `usage`, `error` and `stale_since` the bars are the last good values and a note says
+    when they are from and why they are not newer. With `error` alone, the error fills the screen.
+    """
     img = Image.new("L", (WIDTH, HEIGHT), WHITE)
     d = ImageDraw.Draw(img)
     y = draw_header(d)
     limits = (usage or {}).get("limits") or []
-    if error:
+    if usage and stale_since:
+        when = stale_since.strftime("%-I:%M%p").replace("AM", "am").replace("PM", "pm")
+        d.rectangle([MARGIN, y, RIGHT, y + 96], outline=BLACK, width=3)
+        d.text((MARGIN + 20, y + 10), f"Showing limits from {when}", font=font(30, bold=True, mono=True), fill=BLACK)
+        d.text((MARGIN + 20, y + 52), fit(d, error or "", font(26, mono=True), RIGHT - MARGIN - 40),
+               font=font(26, mono=True), fill=DARK)
+        y += 130
+    elif error:
         d.text((MARGIN, y), "Could not fetch usage:", font=font(52, bold=True), fill=BLACK)
         y += 80
         import textwrap
@@ -420,7 +432,8 @@ def render_limits(usage: dict | None, activity: dict | None, error: str | None =
         y += 120
     for lim in limits:
         y = draw_limit(d, y, lim)
-    if activity and activity["models"] and y < HEIGHT - 420:
+    models_height = 56 + 88 + 52 * min(4, len((activity or {}).get("models") or []))
+    if activity and activity["models"] and y + models_height <= HEIGHT - 110:
         y = draw_label(d, y + 10, "Models · last 7 days")
         draw_models(img, d, y, activity["models"])
     draw_footer(d, "1 of 2" if activity else "")
@@ -450,14 +463,50 @@ def png_bytes(img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
+class UsageCache:
+    """The last good usage response, and how long to wait after the API rate-limits us."""
+
+    MAX_BACKOFF = 30 * 60
+
+    def __init__(self):
+        self.usage: dict | None = None
+        self.fetched_at: datetime | None = None
+        self.error: str | None = None
+        self.strikes = 0
+        self.retry_at = 0.0
+
+    def get(self) -> tuple[dict | None, datetime | None, str | None]:
+        """Returns (usage, stale_since, error). stale_since is None when usage is fresh."""
+        now = time.time()
+        if now >= self.retry_at:
+            try:
+                usage = fetch_usage()
+            except Exception as e:
+                print("fetch failed:", e, file=sys.stderr, flush=True)
+                self.error = str(e)
+                if isinstance(e, urllib.error.HTTPError) and e.code == 429:
+                    self.strikes += 1
+                    wait = min(self.MAX_BACKOFF, REFRESH * 2 ** self.strikes)
+                    self.retry_at = now + wait
+                    print(f"rate limited; next fetch in {wait // 60} min", file=sys.stderr, flush=True)
+            else:
+                self.usage, self.fetched_at, self.error = usage, datetime.now(TZ), None
+                self.strikes, self.retry_at = 0, 0.0
+                return usage, None, None
+        return self.usage, self.fetched_at if self.usage else None, self.error
+
+
+USAGE = UsageCache()
+
+
 def render_pages() -> dict[str, bytes]:
     """Render every screen. The activity screen is left out when no machine has reported."""
     activity = stats.summarize(stats.load_reports(STATE_DIR), datetime.now(TZ))
-    try:
-        limits = render_limits(fetch_usage(), activity)
-    except Exception as e:  # keep the screen useful even when the API is down
-        print("fetch failed:", e, file=sys.stderr, flush=True)
-        limits = render_limits(None, activity, error=str(e))
+    usage, stale_since, error = USAGE.get()
+    if usage:
+        limits = render_limits(usage, activity, error=error, stale_since=stale_since)
+    else:  # keep the screen useful even when the API is down
+        limits = render_limits(None, activity, error=error)
     pages = {"limits": png_bytes(limits)}
     if activity:
         pages["activity"] = png_bytes(render_activity(activity))
