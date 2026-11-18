@@ -1,0 +1,9 @@
+[Unit]
+Description=Claudindle - send this machine's Claude Code activity to the server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=CLAUDINDLE_SERVER=http://192.168.1.104:8080
+ExecStart=/usr/bin/env python3 %h/dev/claudindle/reporter/report.py
