@@ -1,13 +1,19 @@
 # Claudindle
 
 Shows your Claude subscription usage (session, weekly all-models, weekly per-model)
-on a jailbroken Kindle Paperwhite 7th gen, refreshed every 3 minutes.
+on a jailbroken Kindle Paperwhite 7th gen, refreshed every 3 minutes. Once your
+machines report their Claude Code activity, the screen alternates between the
+limits and a 7-day activity page: prompts, sessions, tokens, when you work,
+projects, models and tool calls.
 
-Two parts:
+Three parts:
 
 - `server/` runs on any Linux machine on the LAN (currently `robin`). It polls
   the Claude usage API, renders a 1072x1448 grayscale PNG and serves it at
   `http://<host>:8080/usage.png`.
+- `reporter/` runs on every machine where you use Claude Code. It sums up the
+  local transcripts in `~/.claude/projects` and POSTs counts (never prompt text)
+  to `http://<host>:8080/report`.
 - `kindle/` is a shell script for the Kindle. It downloads the PNG and draws it
   with `eips`. No binary, no credentials on the Kindle.
 
@@ -61,6 +67,31 @@ python3 ~/claudindle/server/claudindle.py login        # then: login --code '<co
 ```
 
 `run.sh` is idempotent, so the 5-minute cron line just restarts the server if it died.
+
+`GET /usage.png` returns the limits and activity screens in turn, one per request.
+`/usage.png?page=limits` or `?page=activity` fetches one without changing the turn.
+Reports are kept in `~/.local/state/claudindle/reports/<host>.json` (`CLAUDINDLE_STATE`).
+
+## Reporter setup
+
+On each machine where you use Claude Code (the server machine too). It needs
+only Python 3.9+, no packages:
+
+```sh
+python3 reporter/report.py --dry-run            # see what would be sent
+python3 reporter/report.py --server http://192.168.1.104:8080
+```
+
+Run it every 10 minutes with the systemd user timer (edit the server address and
+checkout path in the `.service` file first):
+
+```sh
+ln -s "$PWD/reporter/claudindle-report.service" "$PWD/reporter/claudindle-report.timer" ~/.config/systemd/user/
+systemctl --user enable --now claudindle-report.timer
+```
+
+On a Mac, use cron instead:
+`*/10 * * * * python3 ~/dev/claudindle/reporter/report.py --server http://192.168.1.104:8080`
 
 ## Kindle setup
 
